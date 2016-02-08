@@ -11,21 +11,23 @@ using Discord.Modules;
 
 namespace Discord_RPBot.Modules
 {
-    internal class Rolling : IModule
+    internal class Chance : IModule
     {
         private ModuleManager _manager;
         private DiscordClient _client;
         private List<Channel> _channelsToListenTo = new List<Channel>();
+        private List<string> _defaultDeck = new List<string>();
+        private Dictionary<Channel, List<string>> _cards = new Dictionary<Channel, List<string>>();
 
         void IModule.Install(ModuleManager manager)
         {
             _manager = manager;
             _client = manager.Client;
-            
+            InitializeDeck();
 
             manager.CreateCommands("Roll", group =>
             {
-                group.CreateCommand("Info")
+                group.CreateCommand("")
                 .Description("Provides info on rolling")
                 .Do(async e =>
                 {
@@ -75,6 +77,81 @@ namespace Discord_RPBot.Modules
                 });
             });
 
+            manager.CreateCommands("Cards", group =>
+            {
+                group.CreateCommand("")
+                .Description("Provides info on cards")
+                .Do(async e =>
+                {
+                    await _client.SendPrivateMessage(e.User, "To draw a card, use !cards draw. To reset the deck, say !cards reset");
+                });
+
+                group.CreateCommand("Reset") //Assumes 0 Jokers.
+                .Description("Resets the deck.")
+                .Do(async e =>
+                {
+                    InitializeDeck(0, e.Channel);
+                    await _client.SendMessage(e.Channel, $"Resetting the deck with no jokers.");
+                });
+
+                group.CreateCommand("Reset") //Takes a parameter.
+                .Description("Resets the deck with a number of jokers.")
+                .Parameter("Number of jokers to include, if any.")
+                .Do(async e =>
+                {
+                    try
+                    {
+                        int jokers = 0;
+                        jokers = int.Parse(e.Args[0]);
+                        if (jokers < 0)
+                            jokers = 0;
+                        InitializeDeck(jokers, e.Channel);
+                        await _client.SendMessage(e.Channel, $"Resetting the deck with {jokers} jokers.");
+                    }
+                    catch (FormatException ex)
+                    {
+                        await _client.SendMessage(e.Channel, "Please provide a number of jokers." +ex.Message);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Failed to reload deck. " + ex.Message);
+                    }
+                });
+
+                group.CreateCommand("Draw")
+                .Description("Draws a card from the current deck.")
+                .Do(async e =>
+                {
+                    await _client.SendMessage(e.Channel, DrawCard(e.Channel));
+                });
+
+                group.CreateCommand("PDraw")
+                .Description("Draws a card privately")
+                .Do(async e =>
+                {
+                    await _client.SendPrivateMessage(e.User, DrawCard(e.Channel));
+                });
+
+                group.CreateCommand("List")
+                .Description("Reveals the entire deck")
+                .Do(async e =>
+                {
+                    EnsureDeckExists(e.Channel);
+                    string cards = "";
+                    foreach (string s in _cards[e.Channel])
+                    {
+                        cards += $"{s}, ";
+                    }
+                    if (cards.Length >= 2)
+                    {
+                        cards = cards.Remove(cards.Length - 2);
+                    }
+                    else
+                        cards = "Nothing";
+                    await _client.SendMessage(e.Channel, $"Deck currently contains: {cards}");
+                });
+            }); 
+
             _client.MessageReceived += (s, e) =>
             {
                 if (e.User.Id != _client.CurrentUser.Id && _channelsToListenTo.Contains(e.Channel))
@@ -115,7 +192,7 @@ namespace Discord_RPBot.Modules
                 for (int i = FirstBracketIndex+1; i < chars.Length; i++)
                 {
                     if (chars[i] == '(')
-                        counter++;
+                        counter++; //Add for every close bracket between us and our end bracker.
                     if (chars[i] == ')')
                     {
                         if (counter == 0)
@@ -126,7 +203,7 @@ namespace Discord_RPBot.Modules
                         }
                         else
                         {
-                            counter--;
+                            counter--; //Getting closer
                         }
                     }
                 }
@@ -134,6 +211,7 @@ namespace Discord_RPBot.Modules
                 {
                     throw new InvalidOperationException("No matching End Bracket.");
                 }
+                //Slice up the string, figure out the bracket's result, reroll the whole thing with the brackets replaced.
                 string prebracket = "";
                 if (FirstBracketIndex != 0)
                 {
@@ -145,7 +223,7 @@ namespace Discord_RPBot.Modules
                 string newRollString = prebracket + bracketResult + postbracket;
                 return Roll(newRollString, Rolls);
             }
-            else if (PlusIndex != -1)
+            else if (PlusIndex != -1) //Found a plus
             {
                 string particle1 = RollString.Substring(0, PlusIndex);
                 string particle2 = RollString.Substring(PlusIndex + 1);
@@ -158,7 +236,7 @@ namespace Discord_RPBot.Modules
                         double SecondPart = Roll(RollString.Substring(signsIndex), Rolls);
                         return positiveNumber + SecondPart;
                     }
-                    else //Particle2 is just the negative number.
+                    else //Particle2 is just the positive number.
                     {
                         return double.Parse(particle2);
                     }
@@ -170,7 +248,7 @@ namespace Discord_RPBot.Modules
                     return result1 + result2;
                 }
             }
-            else if (MinusIndex != -1)
+            else if (MinusIndex != -1) //Found a minus
             {
                 string particle1 = RollString.Substring(0, MinusIndex);
                 string particle2 = RollString.Substring(MinusIndex + 1);
@@ -200,12 +278,15 @@ namespace Discord_RPBot.Modules
                 //We have a "d" present in the string.
                 string particle1 = RollString.Substring(0, DIndex);
                 string particle2 = RollString.Substring(DIndex + 1);
+                //Calculate left and right side.
                 double result1 = Roll(particle1, Rolls);
                 double result2 = Roll(particle2, Rolls);
+                //Round it, since half die and half-faces don't exist.
                 int NumberToRoll = (int)Math.Round(result1);
                 int SizeOfDie = (int)Math.Round(result2);
                 Random rand = new Random();
                 double finalResult = 0;
+                //Roll a die for every die we're supposed to roll.
                 Rolls.Add("(");
                 for (int i = 0; i < NumberToRoll; i++)
                 {
@@ -216,7 +297,7 @@ namespace Discord_RPBot.Modules
                 Rolls.Add(")");
                 return finalResult;
             }
-            else if (StarIndex != -1)
+            else if (StarIndex != -1) //Found a *
             {
                 string particle1 = RollString.Substring(0, StarIndex);
                 string particle2 = RollString.Substring(StarIndex + 1);
@@ -226,7 +307,7 @@ namespace Discord_RPBot.Modules
                 double result2 = Roll(particle2, Rolls);
                 return result1 * result2;
             }
-            else if (SlashIndex != -1)
+            else if (SlashIndex != -1) //Found a /
             {
                 string particle1 = RollString.Substring(0, SlashIndex);
                 string particle2 = RollString.Substring(SlashIndex + 1);
@@ -238,7 +319,7 @@ namespace Discord_RPBot.Modules
                     throw new DivideByZeroException("Tried to divide by zero.");
                 return result1 / result2;
             }
-            else if (HatIndex != -1)
+            else if (HatIndex != -1) //Found a ^
             {
                 string particle1 = RollString.Substring(0, HatIndex);
                 string particle2 = RollString.Substring(HatIndex + 1);
@@ -248,7 +329,7 @@ namespace Discord_RPBot.Modules
                 double result2 = Roll(particle2, Rolls);
                 return Math.Pow(result1, result2);
             }
-            else
+            else //Just a number. Parse it, return it, done.
             {
                 double finalResult = double.Parse(RollString);
                 return finalResult;
@@ -389,6 +470,68 @@ namespace Discord_RPBot.Modules
                 {
                     Console.WriteLine($"Could not post in channel roll was in for some reason. {e.User.Name}, {e.Channel.Name}, {e.Server.Name}");
                 }
+            }
+        }
+        
+        void InitializeDeck()
+        {
+            _defaultDeck.Clear();
+            string[] values = { "Ace", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Jack", "Queen", "King" };
+            string[] suits = { "Hearts", "Clubs", "Spades", "Diamonds" };
+            foreach (string s1 in values)
+            {
+                foreach (string s2 in suits)
+                {
+                    _defaultDeck.Add($"{s1} of {s2}");
+                }
+            }
+            _defaultDeck.Add("Joker");
+            _defaultDeck.Add("Joker");
+        }
+
+        void InitializeDeck(int Jokers, Channel channel)
+        {
+            EnsureDeckExists(channel);
+            _cards[channel].Clear();
+            string[] values = {"Ace","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Jack","Queen","King" };
+            string[] suits = { "Hearts", "Clubs", "Spades", "Diamonds" };
+            foreach(string s1 in values)
+            {
+                foreach(string s2 in suits)
+                {
+                    _cards[channel].Add($"{s1} of {s2}");
+                }
+            }
+            for (int i = 0; i < Jokers; i++)
+            {
+                _cards[channel].Add("Joker");
+            }
+        }
+
+        string DrawCard(Channel channel)
+        {
+            EnsureDeckExists(channel);
+            if (_cards[channel].Any())
+            {
+                Random rand = new Random();
+                int draw = rand.Next(1, _cards[channel].Count - 1);
+                string card = _cards[channel][draw];
+                _cards[channel].Remove(card);
+                return card;
+            }
+            return "No cards left in the deck.";
+        }
+
+        void EnsureDeckExists(Channel channel)
+        {
+            if(_cards.ContainsKey(channel))
+            {
+                return;
+            }
+            else
+            {
+                _cards.Add(channel, _defaultDeck);
+                InitializeDeck(2, channel);
             }
         }
     }

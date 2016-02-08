@@ -99,7 +99,7 @@ namespace Discord_RPBot
             //Set up modules
             var modules = _client.AddService(new ModuleService());
             modules.Install(new Modules.SimpleCommands(), "Simple Commands", FilterType.Unrestricted);
-            modules.Install(new Modules.Rolling(), "Dice Rolling", FilterType.Unrestricted);
+            modules.Install(new Modules.Chance(), "Dice Rolling", FilterType.Unrestricted);
 
 
 
