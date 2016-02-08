@@ -32,6 +32,7 @@ namespace Discord_RPBot
 
             //Set up permissions
             _client.AddService(new BlacklistService());
+            _client.AddService(new WhitelistService());
             _client.AddService(new PermissionLevelService((u, c) =>
             {
                 if (u.Id == long.Parse(SettingsManager.OwnerID))
@@ -60,7 +61,7 @@ namespace Discord_RPBot
             var commands = _client.AddService(new CommandService(new CommandServiceConfig
             {
                 CommandChar = '!',
-                HelpMode = HelpMode.Public
+                HelpMode = HelpMode.Private
             }));
             commands.RanCommand += (s, e) => Console.WriteLine($"[Command] {(e.Server == null ? "[Private]" : e.Server.ToString())  + "/" + e.Channel} => {e.Message}");
             commands.CommandError += (s, e) =>

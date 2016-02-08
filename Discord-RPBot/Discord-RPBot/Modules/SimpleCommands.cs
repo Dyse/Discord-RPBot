@@ -24,7 +24,6 @@ namespace Discord_RPBot.Modules
             manager.CreateCommands("", group =>
             {
                 group.MinPermissions((int)PermissionLevel.User);
-
                 group.CreateCommand("whoami")
                 .Description("Returns the user's ID")
                 .Do(async e =>
@@ -60,6 +59,23 @@ namespace Discord_RPBot.Modules
                 {
                     await _client.SendMessage(e.Channel, $"Leaving channel.");
                     await _client.LeaveServer(e.Server);
+                });
+
+                group.CreateCommand("Clean up")
+                .Description("Requests the bot to purge all his messages since the last reboot in the channel.")
+                .MinPermissions((int)PermissionLevel.ServerAdmin)
+                .Do(async e =>
+                {
+                    List<Message> myMessages = e.Channel.Messages.Where(m => m.User.Id == _client.CurrentUser.Id).ToList();
+                    await _client.DeleteMessages(myMessages);
+                });
+
+                group.CreateCommand("Undo")
+                .Description("Requests the bot to remove his last message.")
+                .Do(async e =>
+                {
+                    Message lastMessage = e.Channel.Messages.Where(m => m.User.Id == _client.CurrentUser.Id).OrderByDescending(m => m.Timestamp).First();
+                    await _client.DeleteMessage(lastMessage);
                 });
             });
         }

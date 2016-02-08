@@ -25,6 +25,26 @@ namespace Discord_RPBot.Modules
             _client = manager.Client;
             InitializeDeck();
 
+            manager.CreateCommands("Flip", group =>
+            {
+                group.CreateCommand("")
+                .Description("Flip a coin")
+                .Do(async e =>
+                {
+                    Random rand = new Random();
+                    int flip = rand.Next(1, 3);
+                    string side = "";
+                    if (flip == 1)
+                        side = "Heads";
+                    else side = "Tails";
+                    Message m = await _client.SendMessage(e.Channel, "Flipping a coin...");
+                    System.Threading.Thread.Sleep(1500);
+                    await _client.EditMessage(m, "The coin spins high into the air!");
+                    System.Threading.Thread.Sleep(1500);
+                    await _client.EditMessage(m, $"The coin lands... and it's {side}!");
+                });
+            });
+
             manager.CreateCommands("Roll", group =>
             {
                 group.CreateCommand("")
@@ -134,6 +154,7 @@ namespace Discord_RPBot.Modules
 
                 group.CreateCommand("List")
                 .Description("Reveals the entire deck")
+                .MinPermissions((int) PermissionLevel.ServerMod)
                 .Do(async e =>
                 {
                     EnsureDeckExists(e.Channel);
