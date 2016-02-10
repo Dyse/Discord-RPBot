@@ -8,6 +8,9 @@ using Discord.Commands;
 using Discord.Commands.Permissions;
 using Discord.Commands.Permissions.Levels;
 using Discord.Modules;
+using System.Data.Common;
+using Discord_RPBot.Data_Access;
+using Dapper;
 
 namespace Discord_RPBot.Modules
 {
@@ -18,12 +21,15 @@ namespace Discord_RPBot.Modules
         private List<Channel> _channelsToListenTo = new List<Channel>();
         private List<string> _defaultDeck = new List<string>();
         private Dictionary<Channel, List<string>> _cards = new Dictionary<Channel, List<string>>();
+        private DbConnection connection = SQLConnection.connection;
 
         void IModule.Install(ModuleManager manager)
         {
             _manager = manager;
             _client = manager.Client;
             InitializeDeck();
+            ImportListenList();
+            ImportCards();
 
             manager.CreateCommands("Flip", group =>
             {
@@ -47,17 +53,11 @@ namespace Discord_RPBot.Modules
 
             manager.CreateCommands("Roll", group =>
             {
-                group.CreateCommand("")
-                .Description("Provides info on rolling")
-                .Do(async e =>
-                {
-                    await _client.SendPrivateMessage(e.User, $"To roll, wrap your roll with [[ and ]]. Example: [[3d6]] or [[1 + 4d6 + 1d20]]");
-                });
-
                 group.CreateCommand("Listen")
                 .Description("Asks Rollbot to listen to the channel for rolls")
                 .Do(async e =>
                 {
+                    ListenToChannel(e.Channel);
                     if (!_channelsToListenTo.Contains(e.Channel))
                     {
 
@@ -72,6 +72,7 @@ namespace Discord_RPBot.Modules
                 .Description("Asks Rollbot to stop listening to the channel for rolls")
                 .Do(async e =>
                 {
+                    IgnoreChannel(e.Channel);
                     if (_channelsToListenTo.Contains(e.Channel))
                     {
                         _channelsToListenTo.Remove(e.Channel);
@@ -82,7 +83,7 @@ namespace Discord_RPBot.Modules
 
                 });
 
-                group.CreateCommand("Force")
+                group.CreateCommand("")
                 .Description("Asks for a roll, even if rollbot isn't listening.")
                 .Parameter("What you'd like to roll.")
                 .Do(async e =>
@@ -112,6 +113,7 @@ namespace Discord_RPBot.Modules
                 {
                     InitializeDeck(0, e.Channel);
                     await _client.SendMessage(e.Channel, $"Resetting the deck with no jokers.");
+                    SaveDeck(e.Channel);
                 });
 
                 group.CreateCommand("Reset") //Takes a parameter.
@@ -127,6 +129,7 @@ namespace Discord_RPBot.Modules
                             jokers = 0;
                         InitializeDeck(jokers, e.Channel);
                         await _client.SendMessage(e.Channel, $"Resetting the deck with {jokers} jokers.");
+                        SaveDeck(e.Channel);
                     }
                     catch (FormatException ex)
                     {
@@ -138,11 +141,53 @@ namespace Discord_RPBot.Modules
                     }
                 });
 
+                group.CreateCommand("New")
+                .Description("Clears the old deck and starts a new user-defined deck.")
+                .Parameter("Comma seperated list of suits", ParameterType.Required)
+                .Parameter("Comma seperated list of values", ParameterType.Required)
+                .Parameter("Comma seperated list of cards.", ParameterType.Unparsed)
+                .MinPermissions((int) PermissionLevel.ServerMod)
+                .Do(async e =>
+                {
+                    EnsureDeckExists(e.Channel);
+                    _cards[e.Channel].Clear();
+                    if(e.Args.Length >= 3)
+                    {
+                        string[] miscCards = e.Args[2].Split(',');
+                        _cards[e.Channel].AddRange(miscCards);
+                    }
+                    //We have a value for "suits" and "Values"
+                    string[] suits = e.Args[0].Split(',');
+                    string[] values = e.Args[1].Split(',');
+                    foreach (string s1 in suits)
+                    {
+                        foreach (string s2 in values)
+                        {
+                            _cards[e.Channel].Add($"{s2} of {s1}");
+                        }
+                    }
+                    await _client.SendMessage(e.Channel, "New deck imported successfully.");
+                    SaveDeck(e.Channel);
+                });
+
+                group.CreateCommand("New Nosuits")
+                .Description("Clears the old deck and makes a new one composed of only specified cards.")
+                .Parameter("Comma seperated list of cards.")
+                .Do(async e =>
+                {
+                    EnsureDeckExists(e.Channel);
+                    _cards[e.Channel].Clear();
+                    _cards[e.Channel] = e.Args[0].Split(',').ToList();
+                    await _client.SendMessage(e.Channel, "New deck imported successfully.");
+                    SaveDeck(e.Channel);
+                });
+
                 group.CreateCommand("Draw")
                 .Description("Draws a card from the current deck.")
                 .Do(async e =>
                 {
                     await _client.SendMessage(e.Channel, DrawCard(e.Channel));
+                    SaveDeck(e.Channel);
                 });
 
                 group.CreateCommand("PDraw")
@@ -150,6 +195,7 @@ namespace Discord_RPBot.Modules
                 .Do(async e =>
                 {
                     await _client.SendPrivateMessage(e.User, DrawCard(e.Channel));
+                    SaveDeck(e.Channel);
                 });
 
                 group.CreateCommand("List")
@@ -184,7 +230,7 @@ namespace Discord_RPBot.Modules
             
         }
 
-
+        #region Rolling Methods
         /// <summary>
         /// Performs BODMAS operations and rolls any dice found.
         /// </summary>
@@ -240,6 +286,11 @@ namespace Discord_RPBot.Modules
                 }
                 string postbracket = RollString.Substring(ClosingBracketIndex+1);
                 string brackets = RollString.Substring(FirstBracketIndex+1, ClosingBracketIndex - FirstBracketIndex -1);
+                if (prebracket.Last() != '+' && prebracket.Last() != '-' && prebracket.Last() != '*' && prebracket.Last() != '/' && prebracket.Last() != '^')
+                {
+                    //int lastSign = prebracket.LastIndexOfAny(new char[] { '+', '(', '-', '*', '/', '^' });
+                    prebracket += "*";
+                }
                 double bracketResult = Roll(brackets, Rolls);
                 string newRollString = prebracket + bracketResult + postbracket;
                 return Roll(newRollString, Rolls);
@@ -280,6 +331,22 @@ namespace Discord_RPBot.Modules
                     {
                         double negativeNumber = -double.Parse(particle2.Substring(0, signsIndex));
                         double SecondPart = Roll(RollString.Substring(signsIndex), Rolls);
+                        switch (particle2[signsIndex])
+                        {
+                            case '+':
+                                return negativeNumber + SecondPart;
+                            case '-':
+                                return negativeNumber - SecondPart;
+                            case '*':
+                                return negativeNumber * SecondPart;
+                            case '/':
+                                return negativeNumber / SecondPart;
+                            case '^':
+                               return Math.Pow(negativeNumber, SecondPart);
+                            case '(':
+                                return negativeNumber * SecondPart;
+
+                        }
                         return negativeNumber + SecondPart;
                     }
                     else //Particle2 is just the negative number.
@@ -336,8 +403,6 @@ namespace Discord_RPBot.Modules
                     throw new InvalidOperationException("Tried to divide nothing?");
                 double result1 = Roll(particle1, Rolls);
                 double result2 = Roll(particle2, Rolls);
-                if (result2 == 0)
-                    throw new DivideByZeroException("Tried to divide by zero.");
                 return result1 / result2;
             }
             else if (HatIndex != -1) //Found a ^
@@ -355,7 +420,6 @@ namespace Discord_RPBot.Modules
                 double finalResult = double.Parse(RollString);
                 return finalResult;
             }
-            throw new InvalidOperationException("No idea what this is.");
         }
 
         /// <summary>
@@ -484,7 +548,7 @@ namespace Discord_RPBot.Modules
                     {
                         rolls = rolls.Remove(rolls.Length - 1);
                     }
-                    await _client.SendMessage(e.Channel, $"```{rollsValue} ({rolls})```");
+                    await _client.SendMessage(e.Channel, $"Rolling {currentRoll} for {Mention.User(e.User)}\n```{rollsValue} ({rolls})```");
                     break;
                 }
                 catch (Discord.HttpException ex)
@@ -493,7 +557,9 @@ namespace Discord_RPBot.Modules
                 }
             }
         }
-        
+        #endregion
+
+        #region Cards Methods
         void InitializeDeck()
         {
             _defaultDeck.Clear();
@@ -535,7 +601,7 @@ namespace Discord_RPBot.Modules
             if (_cards[channel].Any())
             {
                 Random rand = new Random();
-                int draw = rand.Next(1, _cards[channel].Count - 1);
+                int draw = rand.Next(0, _cards[channel].Count -1);
                 string card = _cards[channel][draw];
                 _cards[channel].Remove(card);
                 return card;
@@ -555,5 +621,72 @@ namespace Discord_RPBot.Modules
                 InitializeDeck(2, channel);
             }
         }
+        #endregion
+
+        #region Data Persistance
+        void ImportListenList()
+        {
+            List<long> channelIDs = connection.Query<long>("Select ChannelID From ChannelsList where Listen = 1").ToList();
+            foreach(Server s in _client.AllServers)
+            {
+                _channelsToListenTo.AddRange(s.Channels.Where(c => channelIDs.Contains(c.Id)));
+            }
+        }
+
+        void ListenToChannel(Channel channel)
+        {
+            connection.Execute(@"UPDATE ChannelsList SET Listen = 1 WHERE ChannelID = @ChannelID IF @@ROWCOUNT = 0 INSERT INTO ChannelsList VALUES(@ChannelID, 1, NULL)", new { ChannelID = channel.Id });
+        }
+
+        void IgnoreChannel(Channel channel)
+        {
+            connection.Execute(@"UPDATE ChannelsList SET Listen = 0 WHERE ChannelID = @ChannelID IF @@ROWCOUNT = 0 INSERT INTO ChannelsList VALUES(@ChannelID, 0, NULL)", new { ChannelID = channel.Id });
+        }
+
+        void ImportCards()
+        {
+            List<Deck> cards = connection.Query<Deck>($"Select ChannelID, Cards From ChannelsList").ToList();
+            foreach(Deck d in cards)
+            {
+                List<string> cardList = new List<string>();
+                if (d.Cards != null)
+                {
+                    cardList = d.Cards.Split(',').ToList();
+                }
+                Channel c = null;
+                foreach (Server s in _client.AllServers)
+                {
+                    List<Channel> channels = s.Channels.Where(ch => d.ChannelID == ch.Id).ToList();
+                    if (channels.Any())
+                        c = channels.First();
+                    else
+                        continue;
+                }
+                _cards.Add(c, cardList);
+            }
+        }
+
+        void SaveDeck(Channel channel)
+        {
+            if (!_cards[channel].Any())
+            {
+                connection.Execute(@"Update ChannelsList SET Cards = NULL Where ChannelID = @ChannelID IF @@Rowcount = 0 INSERT INTO ChannelsList Values(@ChannelID, 0, NULL)", new { ChannelID = channel.Id });
+                return;
+            }
+            string cardData = "";
+            foreach(string s in _cards[channel])
+            {
+                cardData += s + ",";
+            }
+            cardData.Remove(cardData.Length - 1);
+            connection.Execute(@"Update ChannelsList SET Cards = @Cards Where ChannelID = @ChannelID IF @@Rowcount = 0 INSERT INTO ChannelsList Values(@ChannelID, 0, @Cards)", new { ChannelID = channel.Id, Cards = cardData });
+        }
+        #endregion
+    }
+
+    internal class Deck
+    {
+        public string Cards { get; set; }
+        public long ChannelID { get; set; }
     }
 }

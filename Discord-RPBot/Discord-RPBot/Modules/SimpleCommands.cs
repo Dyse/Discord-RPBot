@@ -23,12 +23,29 @@ namespace Discord_RPBot.Modules
 
             manager.CreateCommands("", group =>
             {
-                group.MinPermissions((int)PermissionLevel.User);
                 group.CreateCommand("whoami")
                 .Description("Returns the user's ID")
                 .Do(async e =>
                 {
                     await WhoIs(e, e.User);
+                });
+
+                group.CreateCommand("whereami")
+                .Description("Returns the channel and server's ID")
+                .Do(async e =>
+                {
+                    await _client.SendMessage(e.Channel, $"You are currently in: {e.Server.Id}/{e.Channel.Id}");
+                });
+
+                group.CreateCommand("whois")
+                .Description("Returns the user's ID")
+                .Parameter("The user's Name")
+                .Do(async e =>
+                {
+                    List<User> user = e.Channel.Members.Where(m => m.Name == e.Args[0]).ToList();
+                    if (user.Any())
+                        await WhoIs(e, user.First());
+
                 });
 
                 group.CreateCommand("join")

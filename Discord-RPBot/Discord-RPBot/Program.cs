@@ -9,6 +9,8 @@ using Discord.Commands;
 using Discord.Commands.Permissions.Levels;
 using Discord.Commands.Permissions.Userlist;
 using Discord.Modules;
+using Discord_RPBot.Data_Access;
+using System.Data.Common;
 
 namespace Discord_RPBot
 {
@@ -73,19 +75,19 @@ namespace Discord_RPBot
                         switch (e.ErrorType)
                         {
                             case CommandErrorType.Exception:
-                                //msg = "Unknown error.";
+                                msg = "Unknown error.";
                                 break;
                             case CommandErrorType.BadPermissions:
                                 msg = "You do not have permission to run this command.";
                                 break;
                             case CommandErrorType.BadArgCount:
-                                //msg = "You provided the incorrect number of arguments for this command.";
+                                msg = "You provided the incorrect number of arguments for this command.";
                                 break;
                             case CommandErrorType.InvalidInput:
-                                //msg = "Unable to parse your command, please check your input.";
+                                msg = "Unable to parse your command, please check your input.";
                                 break;
                             case CommandErrorType.UnknownCommand:
-                                //msg = "Unknown command.";
+                                msg = "Unknown command.";
                                 break;
                         }
                     }
@@ -93,14 +95,14 @@ namespace Discord_RPBot
                 if (msg != null)
                 {
                     _client.SendMessage(e.Channel, $"Failed to complete command: {msg}");
-                    Console.WriteLine($"[Error] Failed to complete command: {e.Command.Text} for {e.User.Name}");
+                    Console.WriteLine($"[Error] Failed to complete command: {e.Command?.Text} for {e.User?.Name}");
+                    Console.WriteLine($"Command failure: {msg}");
                 }
-                Console.WriteLine("Command failure");
+                
             };
             //Set up modules
             var modules = _client.AddService(new ModuleService());
-            modules.Install(new Modules.SimpleCommands(), "Simple Commands", FilterType.Unrestricted);
-            modules.Install(new Modules.Chance(), "Dice Rolling", FilterType.Unrestricted);
+            
 
 
 
@@ -114,13 +116,14 @@ namespace Discord_RPBot
                         await _client.Connect(SettingsManager.Email, SettingsManager.Password);
                         if (!_client.AllServers.Any())
                             await _client.AcceptInvite(_client.GetInvite("0nwaapOqh2LPqDL9").Result);
+                        modules.Install(new Modules.SimpleCommands(), "Simple Commands", FilterType.Unrestricted);
+                        modules.Install(new Modules.Chance(), "Dice Rolling", FilterType.Unrestricted);
                         break;
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine("Login failed" + ex.ToString());
                     }
-
                 }
             });
         }
